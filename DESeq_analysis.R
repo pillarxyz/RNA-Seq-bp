@@ -10,6 +10,7 @@ library(ggplot2)
 
 library(Biobase)
 library(org.Hs.eg.db)
+library(EnsDb.Hsapiens.v75)
 library(topGO)
 library(clusterProfiler)
 library(enrichplot)
@@ -17,11 +18,6 @@ library(DESeq2)
 require(DOSE)
 library(pathview)
 
-# https://www.youtube.com/channel/UCnL-Lx5gGlW01OkskZL7JEQ
-# https://www.youtube.com/watch?v=5tGCBW3_0IA
-# https://www.youtube.com/watch?v=tlf6wYJrwKY
-# https://youtu.be/UFB993xufUU
-# https://pubmed.ncbi.nlm.nih.gov/31589133/
 
 #### reading count matrix
 counts = fread("data/GSE124326_count_matrix.txt")
@@ -66,6 +62,8 @@ pheno$diagnosis[pheno$diagnosis=="BP2"]<-"BP"
 pheno$diagnosis <- factor(pheno$diagnosis)
 pheno$lithium <- factor(pheno$lithium)
 
+############ DEG analysis
+
 dds <- DESeqDataSetFromMatrix(countData = counts,
                               colData = pheno,
                               design = ~ diagnosis)
@@ -88,10 +86,64 @@ summary(res)
 ggplot(as(res, "data.frame"), aes(x = pvalue)) +
   geom_histogram(binwidth = 0.01, fill = "Royalblue", boundary = 0)
 
-plotMA(dds, ylim = c( -2, 2))
+# PlotMA log2 fold changes attributable to a given variable 
+# over the mean of normalized counts for all the samples 
+plotMA(res, ylim = c( -2, 2))
 
 plotDispEsts(dds)
 
 write.csv(res, "data/deseq_out.csv")
 
-#res[(abs(res$log2FoldChange) >= 1 & res$padj < 0.05),]
+############ significant DEG 
+
+res_filtered <- res[(abs(res$log2FoldChange) > 1 & res$padj < 0.05),]
+
+ggplot(as(res_filtered, "data.frame"), aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point()
+
+top25_genes <- res_filtered[order(abs(res_filtered$log2FoldChange), decreasing = T),][1:25,]$gene
+top25_genes
+
+write.csv(res_filtered, "data/deseq_out_filtered.csv")
+
+############ GO enrichment analysis
+
+res_filtered$gene <- gsub("\\..*", "", res_filtered$gene)
+res_filtered$SYMBOL <- mapIds(EnsDb.Hsapiens.v75,
+                              keys = res_filtered$gene,
+                              column = "SYMBOL",
+                              keytype = "GENEID",
+                              multiVals = "first")
+
+res_filtered$PATH <- mapIds(org.Hs.eg.db,
+                              keys = res_filtered$SYMBOL,
+                              column = "PATH",
+                              keytype = "SYMBOL",
+                              multiVals = "first")
+
+res_filtered$UNIPROT <- mapIds(org.Hs.eg.db,
+                            keys = res_filtered$SYMBOL,
+                            column = "UNIPROT",
+                            keytype = "SYMBOL",
+                            multiVals = "first")
+
+humanGeneUniverse <- as.character(unique(select(org.Hs.eg.db, keys=keys(org.Hs.eg.db), column="SYMBOL")$SYMBOL))
+geneList <- factor(as.integer(humanGeneUniverse %in% res_filtered$SYMBOL))
+names(geneList) <- res_filtered$SYMBOL
+
+GOdata <- new("topGOdata", 
+              ontology="BP", 
+              allGenes=geneList, 
+              nodeSize=5,
+              annotationFun=annFUN.org, 
+              mapping="org.Hs.eg.db", 
+              ID="symbol")
+
+GOresult <- runTest(GOdata, algorithm = "classic", statistic = "fisher")
+resultTable <- GenTable(GOdata, GOresult, topNodes = 50, numChar=200)
+resultTable
+
+pValue.classic <- score(GOresult)
+head(pValue.classic)
+
+showSigOfNodes(GOdata, score(GOresult), firstSigNodes = 5, useInfo = 'all')
