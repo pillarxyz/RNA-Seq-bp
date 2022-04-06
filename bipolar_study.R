@@ -1,4 +1,3 @@
-
 #### intalling and loading libraries
 library(BiocParallel)
 register(MulticoreParam(4))
@@ -96,7 +95,7 @@ write.csv(res, "data/deseq_out.csv")
 
 ############ significant DEG 
 
-res_filtered <- res[(abs(res$log2FoldChange) > 1 & res$padj < 0.05),]
+res_filtered <- res[(abs(res$log2FoldChange) >= 1 & res$padj <= 0.05),]
 
 ggplot(as(res_filtered, "data.frame"), aes(x = log2FoldChange, y = -log10(padj))) +
   geom_point()
@@ -108,28 +107,29 @@ write.csv(res_filtered, "data/deseq_out_filtered.csv")
 
 ############ GO enrichment analysis
 
-res_filtered$gene <- gsub("\\..*", "", res_filtered$gene)
-res_filtered$SYMBOL <- mapIds(EnsDb.Hsapiens.v75,
-                              keys = res_filtered$gene,
-                              column = "SYMBOL",
-                              keytype = "GENEID",
-                              multiVals = "first")
+res$gene <- gsub("\\..*", "", res$gene)
+res$SYMBOL <- mapIds(EnsDb.Hsapiens.v75,
+                     keys = res$gene,
+                     column = "SYMBOL",
+                     keytype = "GENEID",
+                     multiVals = "first")
 
-res_filtered$PATH <- mapIds(org.Hs.eg.db,
-                              keys = res_filtered$SYMBOL,
-                              column = "PATH",
-                              keytype = "SYMBOL",
-                              multiVals = "first")
+res$PATH <- mapIds(org.Hs.eg.db,
+                   keys = res$SYMBOL,
+                   column = "PATH",
+                   keytype = "SYMBOL",
+                   multiVals = "first")
 
-res_filtered$UNIPROT <- mapIds(org.Hs.eg.db,
-                            keys = res_filtered$SYMBOL,
-                            column = "UNIPROT",
-                            keytype = "SYMBOL",
-                            multiVals = "first")
+res$UNIPROT <- mapIds(org.Hs.eg.db,
+                      keys = res$SYMBOL,
+                      column = "UNIPROT",
+                      keytype = "SYMBOL",
+                      multiVals = "first")
 
 humanGeneUniverse <- as.character(unique(select(org.Hs.eg.db, keys=keys(org.Hs.eg.db), column="SYMBOL")$SYMBOL))
-geneList <- factor(as.integer(humanGeneUniverse %in% res_filtered$SYMBOL))
-names(geneList) <- res_filtered$SYMBOL
+
+geneList <- factor(as.integer(humanGeneUniverse %in% res$SYMBOL))
+names(geneList) <- res$SYMBOL
 
 GOdata <- new("topGOdata", 
               ontology="BP", 
@@ -144,6 +144,14 @@ resultTable <- GenTable(GOdata, GOresult, topNodes = 50, numChar=200)
 resultTable
 
 pValue.classic <- score(GOresult)
-head(pValue.classic)
 
+top_50 <- resultTable$GO.ID
 showSigOfNodes(GOdata, score(GOresult), firstSigNodes = 5, useInfo = 'all')
+
+### GS enrichment analysis
+
+
+### Prepare dataset
+
+
+### Maching Learning Methods
