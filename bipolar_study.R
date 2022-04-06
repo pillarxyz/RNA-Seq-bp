@@ -1,4 +1,4 @@
-#### intalling and loading libraries
+1#### intalling and loading libraries
 library(BiocParallel)
 register(MulticoreParam(4))
 
@@ -16,7 +16,6 @@ library(enrichplot)
 library(DESeq2)
 require(DOSE)
 library(pathview)
-
 
 #### reading count matrix
 counts = fread("data/GSE124326_count_matrix.txt")
@@ -114,6 +113,12 @@ res$SYMBOL <- mapIds(EnsDb.Hsapiens.v75,
                      keytype = "GENEID",
                      multiVals = "first")
 
+res$ENTREZID <- mapIds(org.Hs.eg.db,
+                     keys = res$SYMBOL,
+                     column = "ENTREZID",
+                     keytype = "SYMBOL",
+                     multiVals = "first")
+
 res$PATH <- mapIds(org.Hs.eg.db,
                    keys = res$SYMBOL,
                    column = "PATH",
@@ -150,6 +155,54 @@ showSigOfNodes(GOdata, score(GOresult), firstSigNodes = 5, useInfo = 'all')
 
 ### GS enrichment analysis
 
+df <- res
+
+original_gene_list <- df$log2FoldChange
+
+# name the vector
+names(original_gene_list) <- df$SYMBOL
+
+# Convert gene IDs for gseKEGG function
+# We will lose some genes here because not all IDs will be converted
+ids<-bitr(names(original_gene_list), fromType = "SYMBOL", toType = "ENTREZID", OrgDb="org.Hs.eg.db")
+
+# remove duplicate IDS (here I use "SYMBOL", but it should be whatever was selected as keyType)
+dedup_ids = ids[!duplicated(ids[c("SYMBOL")]),]
+
+# Create a new dataframe having only the genes that were successfully mapped
+df2 = df[which(dedup_ids$SYMBOL %in% df$SYMBOL),]
+
+# Create a new column in df2 with the corresponding ENTREZ IDs
+df2$Y = dedup_ids$ENTREZID
+
+# Create a vector of the gene unuiverse
+kegg_gene_list <- df2$log2FoldChange
+
+# Name vector with ENTREZ ids
+names(kegg_gene_list) <- df2$Y
+kegg_gene_list<-na.omit(kegg_gene_list)
+kegg_gene_list = sort(kegg_gene_list, decreasing = TRUE)
+
+kegg_organism = "hsa"
+kk2 <- gseKEGG(geneList     = kegg_gene_list,
+               organism     = kegg_organism,
+               minGSSize    = 3,
+               maxGSSize    = 800,
+               pvalueCutoff = 0.05,
+               pAdjustMethod = "none",
+               keyType       = "ncbi-geneid")
+
+
+enrichplot::dotplot(kk2, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
+
+# pathways ridge plot (Helpful to interpret up/down-regulated pathways.)
+enrichplot::ridgeplot(kk2) + labs(x = "enrichment distribution")
+
+# top 2 enriched KEGG pathways diagram
+top2_id <- kk2[order(kk2$enrichmentScore, decreasing = T),][1:2,]$ID
+
+pathview(gene.data=kegg_gene_list, pathway.id=top2_id[1], species = kegg_organism)
+pathview(gene.data=kegg_gene_list, pathway.id=top2_id[2], species = kegg_organism)
 
 ### Prepare dataset
 
