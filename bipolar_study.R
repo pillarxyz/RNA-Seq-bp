@@ -1,4 +1,4 @@
-1#### intalling and loading libraries
+# intalling and loading libraries
 library(BiocParallel)
 register(MulticoreParam(4))
 
@@ -17,13 +17,13 @@ library(DESeq2)
 require(DOSE)
 library(pathview)
 
-#### reading count matrix
+# reading count matrix
 counts = fread("data/GSE124326_count_matrix.txt")
 colnames(counts) <- sapply(colnames(counts), function(x){sub(".counts","",x)})
 counts[,1:3] %>% head
 
 
-#### reading phenotypic data
+# reading phenotypic data
 pheno = fread("data/GSE124326_pheno.txt")
 pheno %>% head
 
@@ -31,7 +31,7 @@ levels(factor(pheno$lithium)) # 0: non-lithium user, 1: lithium user
 levels(factor(pheno$diagnosis)) # BP1: patients treated with lithum, BP2: patients not treated with lithium 
 
 
-#### Checking and mapping counts and phenotypic data
+#  Checking and mapping counts and phenotypic data
 
 phenoNames = pheno$sample
 pheno = pheno[,-c("sample")]
@@ -42,14 +42,14 @@ countsNames <- counts$gene
 counts = counts[,-c("gene")]
 rownames(counts) <- countsNames
 
-#Remove the samples in counts that are missing in pheno 
+# Remove the samples in counts that are missing in pheno 
 missingNames <- setdiff(colnames(counts), rownames(pheno)) # elements of x not in y
 missingNames
 
 counts <- counts[, !c(..missingNames)]
 rownames(counts) <- countsNames
 
-#check samples of counts match with those phenotypic information
+# check samples of counts match with those phenotypic information
 all(colnames(counts) == rownames(pheno))
 
 # combining lithium and non-lithium treated BP patients
@@ -71,7 +71,7 @@ mcols(dds)
 dds <- dds[rowSums(counts(dds)) >= 20,]
 
 rnames <- rowData(dds)$gene
-dds <- DESeq(dds)
+dds <- DESeq(dds, parallel = T)
 resultsNames(dds)
 
 res <- results(dds, alpha = 0.05)
@@ -153,13 +153,11 @@ pValue.classic <- score(GOresult)
 top_50 <- resultTable$GO.ID
 showSigOfNodes(GOdata, score(GOresult), firstSigNodes = 5, useInfo = 'all')
 
-### GS enrichment analysis
+############ GS enrichment analysis
 
 df <- res
 
 original_gene_list <- df$log2FoldChange
-
-# name the vector
 names(original_gene_list) <- df$SYMBOL
 
 # Convert gene IDs for gseKEGG function
@@ -205,6 +203,129 @@ pathview(gene.data=kegg_gene_list, pathway.id=top2_id[1], species = kegg_organis
 pathview(gene.data=kegg_gene_list, pathway.id=top2_id[2], species = kegg_organism)
 
 ### Prepare dataset
+res_filtered <- read.csv("data/deseq_out_filtered.csv")
+res_filtered <- subset(res_filtered, select = -c(X))
+
+rownames(counts) <- gsub("\\..*", "", rownames(counts))
+
+counts$gene <- rownames(counts)
+pheno$sample <- rownames(pheno)
+
+top_100_genes <- res_filtered[1:100,]$gene
+top_100 <- res_filtered[1:100,]
+
+top_100_counts <- counts[which(top_100_genes %in% counts$gene),]
+rownames(top_100_counts) <- top_100_counts$gene
+
+dds100 = dds[rownames(top100,)]
+
+############ Classification
+library(MLSeq)
 
 
-### Maching Learning Methods
+# Train Test Split
+n <- ncol(dds100) # number of samples
+p <- nrow(dds100) # number of features=
+class = data.frame(Bipolar=as.numeric(dds100$Bipolar), row.names = colnames(dds100))
+
+# number of samples for test set (30% test, 70% train).
+nTest <- ceiling(n*0.3)
+set.seed(2)
+ind <- sample(n, nTest, FALSE)
+
+# train and test split
+data.train <- as.matrix(counts_100[,-ind]+1)
+data.test <- as.matrix(as.matrix(counts_100[,ind]+1))
+classtr <- factor(class[-ind,])
+classtr <- data.frame(condition=classtr, row.names=colnames(data.train))
+classts <- factor(class[ind,])
+classts <- DataFrame(condition=classts, row.names=colnames(data.test))
+
+# Design = ~ 1 indicates that there is no need to create a differential testing design
+# like before
+data.trainS4 <- DESeqDataSetFromMatrix(countData=data.train, colData=classtr,
+                                       design= ~ 1)
+data.testS4 <- DESeqDataSetFromMatrix(countData=data.test, colData=classts,
+                                      design= ~ 1)
+######## svm radial
+# The control variable sets the method for cross validation, number of partitions and how
+# many times to repeat the process. classProbs gives us the probabilities that an observation
+# belongs to different classes
+ctrl <- trainControl(method = "repeatedcv",
+                     number=2,
+                     repeats=2,
+                     classProbs = FALSE)
+fit.svm = classify(data=data.trainS4, method='svmRadial', preProcessing = 'deseq-rlog',
+                   control = ctrl)
+show(fit.svm)
+confusionMat(fit.svm)
+
+availableMethods()
+
+######### lda
+fit.lda = classify(data=data.trainS4, method='lda', preProcessing = 'deseq-rlog',
+                   control = ctrl)
+show(fit.lda)
+confusionMat(fit.lda)
+
+######### glm
+fit.glm = classify(data=data.trainS4, method='glm', preProcessing = 'deseq-rlog',
+                   control = ctrl)
+show(fit.glm)
+confusionMat(fit.glm)
+
+######### neural networks
+fit.nnet = classify(data=data.trainS4, method='nnet', preProcessing = 'deseq-rlog',
+                    control = ctrl)
+show(fit.nnet)
+confusionMat(fit.nnet)
+
+######### Decision trees
+fit.rpart = classify(data=data.trainS4, method='rpart', preProcessing = 'deseq-rlog',
+                     control = ctrl)
+show(fit.rpart)
+confusionMat(fit.rpart)
+
+######### Gradient Boost Machine
+fit.gbm = classify(data=data.trainS4, method='gbm', preProcessing = 'deseq-rlog',
+                   control = ctrl)
+show(fit.gbm)
+confusionMat(fit.gbm)
+
+
+################# Parameter Tuning
+set.seed(2)
+# Here tuneLength sets the number of levels for parameter tuning
+# ref="1" means that our reference class in the target variable (Bipolar) is 1 which
+# equivalent for being a patient of bipolar disorder
+######### Support vector machines with radial basis function kernel
+fit.svm <- classify(data = data.trainS4, method = "svmRadial",
+                    preProcessing = "deseq-vst", ref = "1", tuneLength = 10,
+                    control = ctrl)
+show(fit.svm)
+######### LDA
+fit.lda <- classify(data = data.trainS4, method = "lda",
+                    preProcessing = "deseq-vst", ref = "1", tuneLength = 10,
+                    control = ctrl)
+show(fit.lda)
+######### Generalized Linear Model
+fit.glm <- classify(data = data.trainS4, method = "glm",
+                    preProcessing = "deseq-vst", ref = "1", tuneLength = 10,
+                    control = ctrl)
+show(fit.glm)
+######### Neural Network
+fit.nnet <- classify(data = data.trainS4, method = "nnet",
+                     preProcessing = "deseq-vst", ref = "1", tuneLength = 10,
+                     control = ctrl)
+show(fit.nnet)
+######### Decision Tree with caret
+fit.rpart <- classify(data = data.trainS4, method = "rpart",
+                      preProcessing = "deseq-vst", ref = "1", tuneLength = 10,
+                      control = ctrl)
+show(fit.rpart)
+######### Gradient Boost Machines
+fit.gbm <- classify(data = data.trainS4, method = "gbm",
+                    preProcessing = "deseq-vst", ref = "1", tuneLength = 10,
+                    control = ctrl)
+show(fit.gbm)
+
